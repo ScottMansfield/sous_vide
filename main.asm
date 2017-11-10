@@ -39,23 +39,27 @@ PIN5        .set    020h                    ; Port 1 Pin 5
 PIN6        .set    040h                    ; Port 1 Pin 6
 PIN7        .set    080h                    ; Port 1 Pin 7
 
-OUTPINS    .set     PIN0|PIN2|PIN6|PIN7     ; Convenience constant - output pins
-INPINS     .set     PIN5                    ; Convenience constant - input pins
+OUTPINS     .set    PIN0|PIN2|PIN6|PIN7     ; Convenience constant - output pins
+INPINS      .set    PIN5                    ; Convenience constant - input pins
 
-RELAY      .set     PIN2                    ; Alias for relay circuit
+RELAY       .set    PIN2                    ; Alias for relay circuit
 
-SPICS      .set     PIN7                    ; Bit-banged SPI constants
-SPICLK     .set     PIN6                    ; Since we are manually reading from the SPI interface
-SPIMISO    .set     PIN5                    ; these constants give a sense of normalcy
+SPICS       .set    PIN7                    ; Bit-banged SPI constants
+SPICLK      .set    PIN6                    ; Since we are manually reading from the SPI interface
+SPIMISO     .set    PIN5                    ; these constants give a sense of normalcy
 
-RAMBASE    .set     0200h                   ; start address of the 128 bytes of RAM
-RAMSIZE    .set     07fh                    ; the total size of the RAM
-RAMEND     .set     RAMBASE + RAMSIZE       ; the last address in RAM
-OBSSTART   .set     RAMBASE                 ; convenience alias for the start of RAM
-NUMOBS     .set     64                      ; the number of observations held in RAM
-OBSEND     .set     RAMBASE + NUMOBS        ; the address after the last observation held in RAM
+RAMBASE     .set    0200h                   ; start address of the 128 bytes of RAM
+RAMSIZE     .set    07fh                    ; the total size of the RAM
+RAMEND      .set    RAMBASE + RAMSIZE       ; the last address in RAM
+OBSSTART    .set    RAMBASE                 ; convenience alias for the start of RAM
+NUMOBS      .set    64                      ; the number of observations held in RAM
+OBSEND      .set    RAMBASE + NUMOBS        ; the address after the last observation held in RAM
 
-TARGET     .set     0CFh                    ; the target water temperature, 132F, or 55.5C
+TARGET      .set    0CFh                    ; the target water temperature, 132F, or 55.5C
+
+; Delay Gold HI and LO
+DLYGLDHI    .set    0032Dh                  ; High 16 bits of the base delay value
+DLYGLDLO    .set    0CD55h                  ; Low 16 bits of the base delay value
 
 ;-------------------------------------------------------------------------------
 ; Linker directives
@@ -232,7 +236,9 @@ fn_calcduty
             ;; Calculate the integral from the last 64 readings
             mov     #0, r6                  ; Integral accumulator
             mov     #OBSSTART, r4           ; Start at the base of RAM
-sum_integ   mov.b   0(r4), r5               ; Read byte from address in r4
+
+sum_integ
+            mov.b   0(r4), r5               ; Read byte from address in r4
             sxt     r5                      ; Make sure things add properly if negative
             add     r5, r6                  ; Add to accumulator.
             inc     r4                      ; increment loop variable / Increment address one byte.
@@ -250,13 +256,35 @@ sum_integ   mov.b   0(r4), r5               ; Read byte from address in r4
             add     r4, r11                 ; r11 now has the sum of the log2 of the proportion and integral
 
             ;; Shift the gold value (total period delay) by the sum of the logarithms
+            ; First, to get the on period, shift the gold value to the right r11 times.
+            mov     #DLYGLDHI, r14          ; Set up the raw gold value
+            mov     #DLYGLDLO, r15          ;
+            mov     r11, r12                ; Set up the loop counter (r12)
 
+shft_on
+            rra     r14                     ; Shift the 32 bit value right (using the carry bit)
+            rrc     r15                     ;
+            dec     r12                     ; loop check. This is ok to do afterwards because we have checks above for 0% duty
+            jne     shft_on                 ; Loop until r12 is 0
+
+            mov     r14, r4                 ; Move return value into place
+            mov     r15, r5                 ;
+
+            ; Second, subtract the on delay from the gold value to get the off delay
+            mov     #DLYGLDHI, r12          ; Move gold delay value into place
+            mov     #DLYGLDLO, r13          ;
+
+            sub     r14, r12                ; 32 bit subtract using carry
+            subc    r15, r13                ;
+
+            mov     r12, r6                 ; move off delay value into return registers
+            mov     r13, r7                 ;
 
 zero_pct_duty  ; If we're over temp, just keep it off
             mov     #0, r4                  ; 0 seconds on
             mov     #0, r5                  ;
-            mov     #0032Dh, r6             ; 10 seconds off
-            mov     #0CD55h, r7             ;
+            mov     #DLYGLDHI, r6           ; 10 seconds off
+            mov     #DLYGLDLO, r7           ;
             ret
 
 ; Calculates the integer log (base 2) of the 16 bit int passed in
